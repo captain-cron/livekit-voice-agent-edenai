@@ -14,6 +14,10 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="./CHANGELOG.md">Changelog</a>
+</p>
+
 ---
 
 ## Architecture
@@ -40,11 +44,11 @@ Railway Project
 
 The frontend provides two voice agent pages at `/pipeline` and `/realtime`, each with:
 
-- **Audio visualizer** — animates for both your microphone input and agent audio output
+- **WebGL aura visualizer** — shader-based aurora effect that reacts to agent state and audio volume (powered by the official LiveKit agents-ui component)
 - **Live transcript console** — shows "You:" and "Agent:" lines in real time, with interim (partial) and final states
 - **One-click connect** — generates a LiveKit token and joins a room via the LiveKit JS SDK
 
-The landing page (`/`) lets you choose between Pipeline and Realtime modes.
+Switch between Pipeline and Realtime modes using the nav tabs at the top of the page.
 
 ## Services
 
