@@ -1,7 +1,6 @@
 """Voice agent that supports both pipeline and realtime sessions."""
 
 import logging
-import os
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -16,12 +15,6 @@ from livekit.plugins import openai, silero
 
 load_dotenv()
 logger = logging.getLogger("voice-agent")
-VALID_MODES = {"pipeline", "realtime"}
-DEFAULT_MODE = os.environ.get("AGENT_MODE", "pipeline").strip().lower()
-
-if DEFAULT_MODE not in VALID_MODES:
-    logger.warning("Invalid AGENT_MODE=%s, defaulting to pipeline", DEFAULT_MODE)
-    DEFAULT_MODE = "pipeline"
 
 server = AgentServer()
 
@@ -49,7 +42,7 @@ def resolve_room_mode(room_name: str) -> str:
         return "realtime"
     if room_name.startswith("pipeline-"):
         return "pipeline"
-    return DEFAULT_MODE
+    return "pipeline"
 
 
 @server.rtc_session()

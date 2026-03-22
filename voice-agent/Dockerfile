@@ -17,7 +17,4 @@ RUN uv run python -c "from livekit.plugins.silero import VAD; VAD.load()" || tru
 COPY . .
 RUN uv sync --frozen
 
-# Default fallback mode when room name does not include a mode prefix.
-ENV AGENT_MODE=pipeline
-
 CMD ["uv", "run", "python", "agent.py", "start"]

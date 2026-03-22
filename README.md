@@ -73,7 +73,7 @@ Supports two modes selected by the web UI (`/pipeline` or `/realtime`):
 | `pipeline` | Whisper STT → GPT-4o-mini → TTS-1 | Separate models, more control |
 | `realtime` | OpenAI Realtime API | Single model, lower latency |
 
-`AGENT_MODE` is now a fallback default used only when a room name does not include a mode prefix.
+Mode is selected dynamically via the web UI — the frontend creates rooms with a `pipeline-` or `realtime-` prefix, and the agent detects the mode from the room name.
 
 ### web-frontend — Test Interface
 
@@ -129,7 +129,6 @@ Local dev uses full UDP mode (no TCP-only restriction).
 | `LIVEKIT_API_KEY` | Shared with livekit-server |
 | `LIVEKIT_API_SECRET` | Shared with livekit-server |
 | `OPENAI_API_KEY` | Your OpenAI API key |
-| `AGENT_MODE` | Fallback mode (`pipeline` default) when room mode is not specified |
 
 ### web-frontend
 
