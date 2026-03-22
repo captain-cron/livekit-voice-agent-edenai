@@ -12,7 +12,7 @@ export default function ModeNav({ activeMode }: ModeNavProps) {
   ]
 
   return (
-    <nav className="flex justify-center gap-1.5 sm:gap-2 mb-3 sm:mb-6">
+    <nav className="flex justify-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-3">
       {modes.map((m) => (
         <Link
           key={m.key}
@@ -20,8 +20,8 @@ export default function ModeNav({ activeMode }: ModeNavProps) {
           className={cn(
             'px-3 sm:px-4 py-1 sm:py-1.5 rounded-full text-xs sm:text-sm no-underline border transition-all',
             m.key === activeMode
-              ? 'text-white bg-blue-500 border-blue-500'
-              : 'text-muted bg-surface border-border hover:text-foreground hover:border-neutral-500',
+              ? 'text-[#00e5ff] bg-[#00e5ff]/15 border-[#00e5ff]/30'
+              : 'text-muted bg-surface border-border hover:text-[#00e5ff]/70 hover:border-[#00e5ff]/30',
           )}
         >
           {m.label}

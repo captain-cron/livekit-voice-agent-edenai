@@ -14,6 +14,10 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="./CHANGELOG.md">Changelog</a>
+</p>
+
 ---
 
 ## Architecture
@@ -40,11 +44,11 @@ Railway Project
 
 The frontend provides two voice agent pages at `/pipeline` and `/realtime`, each with:
 
-- **Audio visualizer** — animates for both your microphone input and agent audio output
+- **WebGL aura visualizer** — shader-based aurora effect that reacts to agent state and audio volume (powered by the official LiveKit agents-ui component)
 - **Live transcript console** — shows "You:" and "Agent:" lines in real time, with interim (partial) and final states
 - **One-click connect** — generates a LiveKit token and joins a room via the LiveKit JS SDK
 
-The landing page (`/`) lets you choose between Pipeline and Realtime modes.
+Switch between Pipeline and Realtime modes using the nav tabs at the top of the page.
 
 ## Services
 
@@ -66,12 +70,14 @@ A **background worker process** (not a web server). Connects outbound to LiveKit
 3. Sends synthesized speech audio back
 4. Publishes transcriptions for both user and agent speech
 
-Supports two modes controlled by `AGENT_MODE`:
+Supports two modes selected by the web UI (`/pipeline` or `/realtime`):
 
 | Mode | Pipeline | Description |
 |------|----------|-------------|
 | `pipeline` | Whisper STT → GPT-4o-mini → TTS-1 | Separate models, more control |
 | `realtime` | OpenAI Realtime API | Single model, lower latency |
+
+Mode is selected dynamically via the web UI — the frontend creates rooms with a `pipeline-` or `realtime-` prefix, and the agent detects the mode from the room name.
 
 ### web-frontend — Test Interface
 
@@ -127,7 +133,6 @@ Local dev uses full UDP mode (no TCP-only restriction).
 | `LIVEKIT_API_KEY` | Shared with livekit-server |
 | `LIVEKIT_API_SECRET` | Shared with livekit-server |
 | `OPENAI_API_KEY` | Your OpenAI API key |
-| `AGENT_MODE` | `pipeline` (default) or `realtime` |
 
 ### web-frontend
 

@@ -1,4 +1,4 @@
-"""Pipeline voice agent: OpenAI STT → GPT-4o-mini → OpenAI TTS."""
+"""Voice agent that supports both pipeline and realtime sessions."""
 
 import logging
 
@@ -37,14 +37,32 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
+def resolve_room_mode(room_name: str) -> str:
+    if room_name.startswith("realtime-"):
+        return "realtime"
+    if room_name.startswith("pipeline-"):
+        return "pipeline"
+    return "pipeline"
+
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    session = AgentSession(
-        stt=openai.STT(model="whisper-1"),
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(model="tts-1", voice="alloy"),
-        vad=ctx.proc.userdata["vad"],
-    )
+    room_name = getattr(ctx.room, "name", "")
+    mode = resolve_room_mode(room_name)
+
+    logger.info("Starting %s session for room %s", mode, room_name)
+
+    if mode == "realtime":
+        session = AgentSession(
+            llm=openai.realtime.RealtimeModel(voice="coral"),
+        )
+    else:
+        session = AgentSession(
+            stt=openai.STT(model="whisper-1"),
+            llm=openai.LLM(model="gpt-4o-mini"),
+            tts=openai.TTS(model="tts-1", voice="alloy"),
+            vad=ctx.proc.userdata["vad"],
+        )
 
     await session.start(agent=VoiceAssistant(), room=ctx.room)
     await session.generate_reply(

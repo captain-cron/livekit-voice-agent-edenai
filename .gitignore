@@ -27,3 +27,7 @@ docker-compose.override.yml
 # Markdown files (except README.md)
 *.md
 !README.md
+!CHANGELOG.md
+
+# Claude Code
+.claude/

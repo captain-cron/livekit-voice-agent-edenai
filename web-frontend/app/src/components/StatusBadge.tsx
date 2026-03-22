@@ -27,8 +27,8 @@ export default function StatusBadge({ status, roomName }: StatusBadgeProps) {
     : labels[status]
 
   return (
-    <div className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm mb-4 sm:mb-8 bg-surface border border-border">
-      <span className={cn('w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full', dotStyles[status])} />
+    <div className="inline-flex items-center gap-1 sm:gap-1.5 px-0 py-0.5 text-[10px] sm:text-xs text-neutral-500 mb-1 sm:mb-2">
+      <span className={cn('w-1.5 h-1.5 rounded-full', dotStyles[status])} />
       <span className="truncate max-w-[200px]">{label}</span>
     </div>
   )

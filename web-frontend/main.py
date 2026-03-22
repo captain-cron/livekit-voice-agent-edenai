@@ -3,7 +3,7 @@
 import os
 import uuid
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from livekit import api
@@ -13,6 +13,7 @@ app = FastAPI(title="LiveKit Voice Agent")
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
+VALID_MODES = {"pipeline", "realtime"}
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
 
@@ -22,7 +23,12 @@ DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
 @app.post("/api/token")
 async def create_token(request: Request):
     body = await request.json()
-    room_name = body.get("room", f"test-room-{uuid.uuid4().hex[:8]}")
+    requested_mode = body.get("mode", "pipeline")
+    mode = requested_mode if requested_mode in VALID_MODES else None
+    if mode is None:
+        raise HTTPException(status_code=400, detail="Invalid mode. Expected 'pipeline' or 'realtime'.")
+
+    room_name = body.get("room", f"{mode}-room-{uuid.uuid4().hex[:8]}")
     identity = body.get("identity", f"user-{uuid.uuid4().hex[:6]}")
 
     token = (
@@ -38,6 +44,7 @@ async def create_token(request: Request):
         "url": LIVEKIT_URL,
         "room": room_name,
         "identity": identity,
+        "mode": mode,
     }
 
 

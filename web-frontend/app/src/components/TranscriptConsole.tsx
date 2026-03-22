@@ -25,9 +25,9 @@ export default function TranscriptConsole({ segments }: TranscriptConsoleProps) 
     <div
       ref={containerRef}
       className={cn(
-        'mt-4 sm:mt-8 bg-[#111] border border-border rounded-lg sm:rounded-xl',
-        'max-h-[120px] sm:max-h-[260px] min-h-[60px] sm:min-h-[80px] overflow-y-auto',
-        'p-2.5 sm:p-4 text-left text-xs sm:text-sm leading-relaxed',
+        'mt-1.5 sm:mt-3 bg-[#111] border border-border rounded-lg sm:rounded-xl',
+        'max-h-[100px] sm:max-h-[200px] min-h-[48px] sm:min-h-[60px] overflow-y-auto',
+        'px-3 py-2 sm:p-4 text-left text-xs sm:text-sm leading-relaxed',
       )}
     >
       {segments.length === 0 ? (
