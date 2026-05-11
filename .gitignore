@@ -24,10 +24,11 @@ node_modules/
 # Docker
 docker-compose.override.yml
 
-# Markdown files (except README.md)
+# Markdown files (except README.md, CHANGELOG.md, AGENTS.md)
 *.md
 !README.md
 !CHANGELOG.md
+!AGENTS.md
 
 # Claude Code
 .claude/
