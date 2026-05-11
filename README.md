@@ -5,7 +5,7 @@
 <h1 align="center">LiveKit Self-Hosted Voice AI on Railway</h1>
 
 <p align="center">
-  Deploy a fully self-hosted LiveKit voice AI stack on Railway — LiveKit server, Python voice agent, Redis, and a web frontend — with zero external dependencies beyond an OpenAI API key.
+  Deploy a fully self-hosted LiveKit voice AI stack on Railway — LiveKit server, Python voice agent, Redis, and a web frontend — powered by Eden AI for LLM, STT, and TTS.
 </p>
 
 <p align="center">
@@ -74,8 +74,8 @@ Supports two modes selected by the web UI (`/pipeline` or `/realtime`):
 
 | Mode | Pipeline | Description |
 |------|----------|-------------|
-| `pipeline` | Whisper STT → GPT-4o-mini → TTS-1 | Separate models, more control |
-| `realtime` | OpenAI Realtime API | Single model, lower latency |
+| `pipeline` | Eden AI Deepgram STT → Eden AI OpenAI LLM → Eden AI ElevenLabs TTS | Default pipeline |
+| `realtime` | Same as pipeline | Eden AI does not provide a speech-to-speech realtime API; both routes use the same chain |
 
 Mode is selected dynamically via the web UI — the frontend creates rooms with a `pipeline-` or `realtime-` prefix, and the agent detects the mode from the room name.
 
@@ -90,7 +90,7 @@ Railway-managed Redis. LiveKit uses it to track active rooms, participants, and 
 ## Deploy to Railway
 
 1. Click the **Deploy on Railway** button above
-2. Set your `OPENAI_API_KEY` when prompted
+2. Set your `EDENAI_API_KEY` when prompted
 3. Wait for all services to deploy
 4. **Add a TCP proxy** to `livekit-server` (Settings → Networking → TCP Proxy → application port `7882`)
 5. **Redeploy `livekit-server`** after adding the TCP proxy
@@ -102,9 +102,9 @@ Railway-managed Redis. LiveKit uses it to track active rooms, participants, and 
 ## Local Development
 
 ```bash
-# Copy env file and add your OpenAI key
+# Copy env file and add your Eden AI key
 cp .env.example .env
-# Edit .env with your OPENAI_API_KEY
+# Edit .env with your EDENAI_API_KEY
 
 # Start all services
 docker compose up --build
@@ -132,7 +132,10 @@ Local dev uses full UDP mode (no TCP-only restriction).
 | `LIVEKIT_URL` | LiveKit server WebSocket URL (`wss://...`) |
 | `LIVEKIT_API_KEY` | Shared with livekit-server |
 | `LIVEKIT_API_SECRET` | Shared with livekit-server |
-| `OPENAI_API_KEY` | Your OpenAI API key |
+| `EDENAI_API_KEY` | Your Eden AI API key (used for LLM, STT, and TTS) |
+| `EDENAI_MODEL` | LLM model selector, e.g. `openai/gpt-4.1-mini` |
+| `EDENAI_STT_PROVIDER` | STT provider/model, e.g. `audio/speech_to_text_async/deepgram/nova-3` |
+| `EDENAI_TTS_PROVIDER` | TTS provider/model, e.g. `audio/tts/elevenlabs/eleven_flash_v2_5` |
 
 ### web-frontend
 
@@ -144,7 +147,9 @@ Local dev uses full UDP mode (no TCP-only restriction).
 
 ## Customization
 
-**Swap LLM provider**: Edit `voice-agent/agent.py` — replace `openai.LLM(...)` with any supported plugin (Anthropic, Google, etc.) and add the corresponding dependency to `pyproject.toml`.
+**Swap LLM provider**: Change `EDENAI_MODEL` (e.g. `anthropic/claude-3-5-sonnet`, `google/gemini-1.5-pro`). Eden AI routes the request to the chosen provider.
+
+**Swap STT / TTS provider**: Change `EDENAI_STT_PROVIDER` or `EDENAI_TTS_PROVIDER` (e.g. `audio/tts/openai/tts-1`).
 
 **Add tools**: Add function tools to the `VoiceAssistant` agent class using LiveKit's tool decorator pattern.
 

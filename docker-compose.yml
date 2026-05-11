@@ -30,7 +30,10 @@ services:
       - LIVEKIT_URL=ws://livekit-server:7880
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secret}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EDENAI_API_KEY=${EDENAI_API_KEY}
+      - EDENAI_MODEL=${EDENAI_MODEL:-openai/gpt-4.1-mini}
+      - EDENAI_STT_PROVIDER=${EDENAI_STT_PROVIDER:-audio/speech_to_text_async/deepgram/nova-3}
+      - EDENAI_TTS_PROVIDER=${EDENAI_TTS_PROVIDER:-audio/tts/elevenlabs/eleven_flash_v2_5}
     depends_on:
       - livekit-server
 
