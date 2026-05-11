@@ -6,6 +6,7 @@ pipeline. Eden AI does not expose a speech-to-speech realtime endpoint, so the
 """
 
 import asyncio
+import json
 import logging
 import os
 
@@ -87,12 +88,43 @@ def _build_session(ctx: JobContext) -> AgentSession:
     )
 
 
+def _read_participant_context(participant) -> dict:
+    """Decode the participant metadata the web-frontend stuffed into the token.
+
+    Expected shape (set in web-frontend/main.py /api/token):
+        {"user_id": "...", "roles": ["..."], "context": {...}}
+    """
+    raw = getattr(participant, "metadata", "") or ""
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning("participant metadata was not valid JSON: %r", raw[:200])
+        return {}
+
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     room_name = getattr(ctx.room, "name", "")
     mode = resolve_room_mode(room_name)
-    logger.info("Starting %s session for room %s (Eden AI pipeline)", mode, room_name)
 
+    # Wait for the user to actually join before we read their metadata —
+    # the LiveKit token's metadata is attached to the participant, not the
+    # room. ctx.wait_for_participant() blocks until exactly one user is in.
+    participant = await ctx.wait_for_participant()
+    ctxinfo = _read_participant_context(participant)
+    user_id = ctxinfo.get("user_id")
+    roles = ctxinfo.get("roles") or []
+    extra = ctxinfo.get("context") or {}
+    logger.info(
+        "Starting %s session for room %s (user_id=%s roles=%s context=%s)",
+        mode, room_name, user_id, roles, extra,
+    )
+
+    # Branch behaviour by role here if needed. For now everyone gets the
+    # default assistant; the role + any frontend-supplied context (e.g.
+    # report_id) is available for whoever wires the meeting/report flow.
     session = _build_session(ctx)
     await session.start(agent=VoiceAssistant(), room=ctx.room)
     # Small settle delay so the user's first connection-audio doesn't race
