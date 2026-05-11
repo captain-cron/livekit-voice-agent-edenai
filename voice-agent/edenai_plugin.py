@@ -1,20 +1,30 @@
-"""Eden AI STT and TTS plugins for LiveKit voice agents.
+"""Eden AI v3 STT and TTS plugins for LiveKit voice agents.
 
-Eden AI's audio APIs are not OpenAI-compatible, so this module wraps them in
-the livekit.agents STT/TTS abstract base classes.
+Eden AI v3 (`api.edenai.run/v3`) has a unified universal-ai endpoint that
+accepts a ``model`` like ``audio/speech_to_text_async/<provider>/<model>`` or
+``audio/tts/<provider>/<model>``. The chat completions endpoint at
+``/v3/chat/completions`` is OpenAI-compatible (used by the LLM via the standard
+openai plugin with a base_url override).
 
-- STT: POST /v2/audio/speech_to_text_async (launch) + poll
-- TTS: POST /v2/audio/text_to_speech (sync, returns base64-encoded audio)
+STT and TTS aren't OpenAI-compatible, so this module wraps them in the
+livekit-agents STT/TTS abstract base classes.
 
-LLM is handled separately via the openai plugin with a custom base_url since
-Eden AI exposes /v2/llm/chat/completions in OpenAI Chat Completions format.
+STT flow:
+  1. POST /v3/upload (multipart with the WAV bytes) → returns ``file_id`` UUID
+  2. POST /v3/universal-ai/async with ``input.file = file_id`` → returns the
+     job. In practice the response already includes ``output.text`` because
+     small clips finish synchronously, but we still poll if status != success.
+
+TTS flow:
+  POST /v3/universal-ai/ with ``input.text`` → returns
+  ``output.audio_resource_url``. We then HTTP-GET the mp3 bytes and hand them
+  to the LiveKit AudioEmitter (mime_type="audio/mp3"), which decodes to PCM
+  internally.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import logging
 import os
 from dataclasses import dataclass
@@ -32,66 +42,70 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import NotGivenOr, NOT_GIVEN
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 
 logger = logging.getLogger("edenai")
 
-EDENAI_BASE_URL = "https://api.edenai.run/v2"
-
-
-def _provider_and_model(spec: str) -> tuple[str, str | None]:
-    """Parse "provider/model" or just "provider" into (provider, model)."""
-    if "/" in spec:
-        provider, model = spec.split("/", 1)
-        return provider, model
-    return spec, None
+EDENAI_BASE_URL = "https://api.edenai.run/v3"
 
 
 @dataclass
 class _STTOptions:
-    provider: str
-    model: str | None
+    model: str
     language: str
 
 
 class EdenAISTT(stt.STT):
-    """Eden AI speech-to-text via the async launch + poll endpoints."""
+    """Eden AI speech-to-text via /v3/upload + /v3/universal-ai/async."""
 
     def __init__(
         self,
         *,
-        provider_spec: str = "deepgram/nova-3",
+        model: str = "audio/speech_to_text_async/deepgram/nova-3",
         language: str = "en-US",
         api_key: str | None = None,
-        poll_interval: float = 0.3,
+        poll_interval: float = 0.5,
         poll_timeout: float = 30.0,
-        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
         )
-        provider, model = _provider_and_model(provider_spec)
-        self._opts = _STTOptions(provider=provider, model=model, language=language)
+        self._opts = _STTOptions(model=model, language=language)
         self._api_key = api_key or os.environ.get("EDENAI_API_KEY")
         if not self._api_key:
             raise ValueError("EDENAI_API_KEY is required for EdenAISTT")
         self._poll_interval = poll_interval
         self._poll_timeout = poll_timeout
-        self._session = http_session
 
     @property
     def model(self) -> str:
-        return f"{self._opts.provider}/{self._opts.model or 'default'}"
+        return self._opts.model
 
     @property
     def provider(self) -> str:
-        return f"edenai/{self._opts.provider}"
+        return "edenai"
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = utils.http_context.http_session()
-        return self._session
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._api_key}"}
+
+    async def _upload(self, session: aiohttp.ClientSession, wav_bytes: bytes, timeout: float) -> str:
+        form = aiohttp.FormData()
+        form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
+        async with session.post(
+            f"{EDENAI_BASE_URL}/upload",
+            data=form,
+            headers=self._headers(),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            if resp.status >= 400:
+                body = await resp.text()
+                raise APIStatusError(message=f"Eden AI upload failed: {body}", status_code=resp.status)
+            payload = await resp.json()
+        file_id = payload.get("file_id")
+        if not file_id:
+            raise APIStatusError(message=f"Eden AI upload: missing file_id ({payload})", status_code=502)
+        return file_id
 
     async def _recognize_impl(
         self,
@@ -103,59 +117,65 @@ class EdenAISTT(stt.STT):
         lang = language if language and language is not NOT_GIVEN else self._opts.language
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
-        session = self._ensure_session()
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-
-        form = aiohttp.FormData()
-        form.add_field("providers", self._opts.provider)
-        if self._opts.model:
-            form.add_field("model", self._opts.model)
-        form.add_field("language", lang)
-        form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
+        session = utils.http_context.http_session()
+        timeout = conn_options.timeout
 
         try:
-            async with session.post(
-                f"{EDENAI_BASE_URL}/audio/speech_to_text_async",
-                data=form,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
-            ) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    raise APIStatusError(
-                        message=f"Eden AI STT launch failed: {body}",
-                        status_code=resp.status,
-                    )
-                launch = await resp.json()
+            file_id = await self._upload(session, wav_bytes, timeout)
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.ClientError as e:
             raise APIConnectionError() from e
 
-        job_id = launch.get("public_id") or launch.get("id")
+        body = {
+            "model": self._opts.model,
+            "input": {"file": file_id, "language": lang},
+            "show_original_response": False,
+        }
+
+        try:
+            async with session.post(
+                f"{EDENAI_BASE_URL}/universal-ai/async",
+                json=body,
+                headers={**self._headers(), "Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                if resp.status >= 400:
+                    err = await resp.text()
+                    raise APIStatusError(message=f"Eden AI STT launch failed: {err}", status_code=resp.status)
+                payload = await resp.json()
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError() from e
+
+        # Many short clips return final output synchronously.
+        text = self._extract_text(payload)
+        if text is not None:
+            return self._event(lang, text)
+
+        job_id = payload.get("public_id") or payload.get("id")
         if not job_id:
             raise APIStatusError(
-                message=f"Eden AI STT did not return a job id: {launch}",
+                message=f"Eden AI STT: no public_id and no output ({payload})",
                 status_code=502,
             )
 
-        # Poll until finished.
         deadline = asyncio.get_event_loop().time() + self._poll_timeout
         while True:
-            await asyncio.sleep(self._poll_interval)
             if asyncio.get_event_loop().time() > deadline:
                 raise APITimeoutError()
+            await asyncio.sleep(self._poll_interval)
             try:
                 async with session.get(
-                    f"{EDENAI_BASE_URL}/audio/speech_to_text_async/{job_id}",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
+                    f"{EDENAI_BASE_URL}/universal-ai/async/{job_id}",
+                    headers=self._headers(),
+                    timeout=aiohttp.ClientTimeout(total=timeout),
                 ) as resp:
                     if resp.status >= 400:
-                        body = await resp.text()
+                        err = await resp.text()
                         raise APIStatusError(
-                            message=f"Eden AI STT poll failed: {body}",
-                            status_code=resp.status,
+                            message=f"Eden AI STT poll failed: {err}", status_code=resp.status
                         )
                     payload = await resp.json()
             except asyncio.TimeoutError as e:
@@ -163,78 +183,66 @@ class EdenAISTT(stt.STT):
             except aiohttp.ClientError as e:
                 raise APIConnectionError() from e
 
-            status = payload.get("status")
-            if status == "finished":
-                results = payload.get("results", {}) or {}
-                provider_result = results.get(self._opts.provider) or {}
-                text = (provider_result.get("text") or "").strip()
-                return stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language=lang, text=text)],
-                )
-            if status == "failed":
+            text = self._extract_text(payload)
+            if text is not None:
+                return self._event(lang, text)
+            if payload.get("status") == "fail" or payload.get("error"):
                 raise APIStatusError(
-                    message=f"Eden AI STT job failed: {payload}",
+                    message=f"Eden AI STT job failed: {payload.get('error') or payload}",
                     status_code=502,
                 )
+
+    @staticmethod
+    def _extract_text(payload: dict[str, Any]) -> str | None:
+        status = payload.get("status")
+        output = payload.get("output") or {}
+        if status == "success" and isinstance(output, dict) and "text" in output:
+            return (output.get("text") or "").strip()
+        return None
+
+    @staticmethod
+    def _event(lang: str, text: str) -> stt.SpeechEvent:
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[stt.SpeechData(language=lang, text=text)],
+        )
 
 
 @dataclass
 class _TTSOptions:
-    provider: str
-    model: str | None
-    voice: str
+    model: str
     language: str
     sample_rate: int
 
 
 class EdenAITTS(tts.TTS):
-    """Eden AI text-to-speech via the synchronous /v2/audio/text_to_speech endpoint.
-
-    The endpoint returns base64-encoded audio. We decode and re-emit as a chunked
-    stream so the LiveKit pipeline can play it.
-    """
+    """Eden AI text-to-speech via /v3/universal-ai/."""
 
     def __init__(
         self,
         *,
-        provider_spec: str = "elevenlabs/eleven_flash_v2_5",
-        voice: str = "FEMALE",
+        model: str = "audio/tts/elevenlabs/eleven_flash_v2_5",
         language: str = "en-US",
         api_key: str | None = None,
         sample_rate: int = 24000,
-        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
             num_channels=1,
         )
-        provider, model = _provider_and_model(provider_spec)
-        self._opts = _TTSOptions(
-            provider=provider,
-            model=model,
-            voice=voice,
-            language=language,
-            sample_rate=sample_rate,
-        )
+        self._opts = _TTSOptions(model=model, language=language, sample_rate=sample_rate)
         self._api_key = api_key or os.environ.get("EDENAI_API_KEY")
         if not self._api_key:
             raise ValueError("EDENAI_API_KEY is required for EdenAITTS")
-        self._session = http_session
 
     @property
     def model(self) -> str:
-        return f"{self._opts.provider}/{self._opts.model or 'default'}"
+        return self._opts.model
 
     @property
     def provider(self) -> str:
-        return f"edenai/{self._opts.provider}"
-
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = utils.http_context.http_session()
-        return self._session
+        return "edenai"
 
     def synthesize(
         self,
@@ -242,11 +250,7 @@ class EdenAITTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "_EdenAIChunkedStream":
-        return _EdenAIChunkedStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-        )
+        return _EdenAIChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class _EdenAIChunkedStream(tts.ChunkedStream):
@@ -262,25 +266,19 @@ class _EdenAIChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         opts = self._edenai_tts._opts
-        session = self._edenai_tts._ensure_session()
+        session = utils.http_context.http_session()
         headers = {
             "Authorization": f"Bearer {self._edenai_tts._api_key}",
             "Content-Type": "application/json",
         }
-        body: dict[str, Any] = {
-            "providers": opts.provider,
-            "text": self._input_text,
-            "language": opts.language,
-            "option": opts.voice,
+        body = {
+            "model": opts.model,
+            "input": {"text": self._input_text, "language": opts.language},
+            "show_original_response": False,
         }
-        if opts.model:
-            body["model"] = opts.model
-        # Request MP3 since most providers default to it; we'll decode to PCM below.
-        body["audio_format"] = "mp3"
 
-        request_id = utils.shortuuid()
         output_emitter.initialize(
-            request_id=request_id,
+            request_id=utils.shortuuid(),
             sample_rate=opts.sample_rate,
             num_channels=1,
             mime_type="audio/mp3",
@@ -289,16 +287,15 @@ class _EdenAIChunkedStream(tts.ChunkedStream):
 
         try:
             async with session.post(
-                f"{EDENAI_BASE_URL}/audio/text_to_speech",
+                f"{EDENAI_BASE_URL}/universal-ai/",
                 json=body,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
             ) as resp:
                 if resp.status >= 400:
-                    error_body = await resp.text()
+                    err = await resp.text()
                     raise APIStatusError(
-                        message=f"Eden AI TTS failed: {error_body}",
-                        status_code=resp.status,
+                        message=f"Eden AI TTS failed: {err}", status_code=resp.status
                     )
                 payload = await resp.json()
         except asyncio.TimeoutError as e:
@@ -306,18 +303,35 @@ class _EdenAIChunkedStream(tts.ChunkedStream):
         except aiohttp.ClientError as e:
             raise APIConnectionError() from e
 
-        provider_result = payload.get(opts.provider) or {}
-        if provider_result.get("status") == "fail":
+        if payload.get("status") != "success":
             raise APIStatusError(
-                message=f"Eden AI TTS provider error: {provider_result.get('error')}",
+                message=f"Eden AI TTS error: {payload.get('error') or payload}",
                 status_code=502,
             )
-        audio_b64 = provider_result.get("audio")
-        if not audio_b64:
+
+        output = payload.get("output") or {}
+        audio_url = output.get("audio_resource_url") or output.get("audio_resource") or output.get("audio")
+        if not audio_url or not isinstance(audio_url, str):
             raise APIStatusError(
-                message=f"Eden AI TTS returned no audio: {payload}",
+                message=f"Eden AI TTS: no audio in response ({payload})",
                 status_code=502,
             )
-        audio_bytes = base64.b64decode(audio_b64)
+
+        try:
+            async with session.get(
+                audio_url,
+                timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+            ) as resp:
+                if resp.status >= 400:
+                    raise APIStatusError(
+                        message=f"Eden AI TTS audio fetch failed (status {resp.status})",
+                        status_code=resp.status,
+                    )
+                audio_bytes = await resp.read()
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError() from e
+
         output_emitter.push(audio_bytes)
         output_emitter.flush()
