@@ -1,10 +1,11 @@
 [project]
 name = "web-frontend"
-version = "0.2.0"
-description = "React web frontend for LiveKit voice agents"
+version = "0.3.0"
+description = "Voice agent web frontend (LiveKit token mint + SuperTokens auth gate)"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "livekit-api",
+    "supertokens-python",
 ]
