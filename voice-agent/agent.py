@@ -31,6 +31,7 @@ from livekit.agents import (
     JobProcess,
     cli,
 )
+from livekit.agents.llm import function_tool
 from livekit.agents.voice import events as agent_events
 from livekit.plugins import openai, silero
 
@@ -51,8 +52,67 @@ DEFAULT_INSTRUCTIONS = (
 
 
 class VoiceAssistant(Agent):
+    """Generic assistant used by the /pipeline + /realtime test surfaces.
+
+    No tools, no portals.cx tie-in — strictly conversational.
+    """
+
     def __init__(self, instructions: str = DEFAULT_INSTRUCTIONS) -> None:
         super().__init__(instructions=instructions)
+
+
+class RocAgent(Agent):
+    """The ROC funnel-review agent.
+
+    Exposes a single function tool: lookup_opportunity. The tool calls back
+    to portals.cx, which checks rep ownership BEFORE returning data. This
+    is the bot's only data-access path mid-call — anything the bot says
+    about an opportunity must come either from the WORKLIST loaded at
+    session start or from this tool's response, both of which are scoped
+    to the rep's own deals.
+    """
+
+    def __init__(
+        self,
+        *,
+        instructions: str,
+        session_id: str,
+        roc_client: RocClient,
+    ) -> None:
+        super().__init__(instructions=instructions)
+        self._session_id = session_id
+        self._roc_client = roc_client
+
+    @function_tool
+    async def lookup_opportunity(self, opp_number: str) -> str:
+        """Look up an opportunity by its number when the rep asks about one
+        that wasn't in the worklist. Use this when the rep says something
+        like 'what about OPP-90042?' or 'pull up opportunity 1-2-3-4-5'.
+
+        Pass the bare number (no 'OPP-' prefix, no dashes). Examples:
+        '90042', '12345'.
+
+        Returns either the opportunity details (status, customer, MRR,
+        days stale, last note) or a denial. If denied, tell the rep
+        verbatim that you're scoped to their own opportunities and move on.
+        """
+        if not opp_number:
+            return "no opp number given"
+        result = await self._roc_client.lookup_opportunity(
+            self._session_id, opp_number,
+        )
+        if result.get("error"):
+            return "lookup_failed: temporary error fetching that opportunity"
+        if not result.get("found"):
+            return f"not_found: no opportunity matching {opp_number}"
+        if result.get("authorized") is False:
+            return (
+                "access_denied: that opportunity is not assigned to this rep. "
+                "Tell the rep you can only discuss their own opportunities "
+                "and move on."
+            )
+        opp = result.get("opportunity") or {}
+        return json.dumps(opp, default=str)
 
 
 def prewarm(proc: JobProcess):
@@ -275,7 +335,14 @@ async def _run_roc_session(ctx: JobContext, meta: dict[str, Any]) -> None:
         if text and role == "assistant":
             _record("agent", str(text))
 
-    await session.start(agent=VoiceAssistant(instructions=instructions), room=ctx.room)
+    await session.start(
+        agent=RocAgent(
+            instructions=instructions,
+            session_id=session_id,
+            roc_client=client,
+        ),
+        room=ctx.room,
+    )
     await asyncio.sleep(0.5)
     _record("system", f"Session opened. Stale items: {len(records)}.", {"phase": "open"})
 

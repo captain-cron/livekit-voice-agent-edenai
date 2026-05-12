@@ -112,6 +112,42 @@ class RocClient:
             # losing a line is annoying but not catastrophic.
             logger.warning("transcript %s network error: %s", session_id, e)
 
+    async def lookup_opportunity(
+        self, session_id: str, opp_number: str
+    ) -> dict[str, Any]:
+        """Ask portals.cx whether the rep on this session is allowed to discuss
+        an opportunity, and return the scoped data if so.
+
+        Returns one of:
+          {"found": False}
+          {"found": True, "authorized": False, "reason": "..."}
+          {"found": True, "authorized": True, "opportunity": {...}}
+          {"error": "..."}
+        """
+        if not self.configured:
+            return {"error": "lookup not configured"}
+        body = {"sessionId": session_id, "oppNumber": opp_number}
+        url = f"{self.base_url}/api/voice-agent/internal/lookup-opportunity"
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(
+                    url,
+                    headers=self._headers(),
+                    json=body,
+                    timeout=aiohttp.ClientTimeout(total=self.timeout),
+                ) as resp:
+                    if resp.status >= 400:
+                        body_text = await resp.text()
+                        logger.warning(
+                            "lookup-opportunity %s/%s -> %s: %s",
+                            session_id, opp_number, resp.status, body_text[:200],
+                        )
+                        return {"error": f"http {resp.status}"}
+                    return await resp.json()
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            logger.warning("lookup-opportunity network error: %s", e)
+            return {"error": "network"}
+
     async def post_end_of_call(self, session_id: str) -> None:
         if not self.configured:
             return
