@@ -278,7 +278,23 @@ async def _run_roc_session(ctx: JobContext, meta: dict[str, Any]) -> None:
     await session.start(agent=VoiceAssistant(instructions=instructions), room=ctx.room)
     await asyncio.sleep(0.5)
     _record("system", f"Session opened. Stale items: {len(records)}.", {"phase": "open"})
-    await session.generate_reply(instructions=greeting)
+
+    # Speak the greeting VERBATIM via TTS, bypassing the LLM. Using
+    # generate_reply(instructions=greeting) made the LLM see both the system
+    # prompt's per-item template AND the greeting cue and decide to skip
+    # straight to item 1 — David's "no warm hello, just opp numbers"
+    # complaint. session.say() pipes the literal text to the TTS, so the
+    # greeting is non-negotiable. We mirror it into the transcript by hand
+    # since session.say emits as a system-source TTS, not a chat turn.
+    _record("agent", greeting, {"phase": "greeting"})
+    await session.say(greeting, allow_interruptions=True)
+
+    # Now hand the call to the LLM. Tight cue so it skips its own preamble
+    # and goes straight to item 1; the per-item template lives in the
+    # system prompt.
+    await session.generate_reply(
+        instructions="Start with item 1 from the WORKLIST. Follow the PER ITEM template exactly."
+    )
 
     # Park the worker until the rep disconnects, then trigger end-of-call.
     # ctx.room emits "disconnected" / "participant_disconnected" — we wait
