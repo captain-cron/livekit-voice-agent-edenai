@@ -166,6 +166,13 @@ async def entrypoint(ctx: JobContext):
     room_name = getattr(ctx.room, "name", "")
     mode = resolve_room_mode(room_name)
 
+    # Connect the worker's room handle BEFORE waiting for a participant —
+    # wait_for_participant() will RuntimeError("room is not connected")
+    # otherwise. The older generic path used to skip this because
+    # session.start(room=...) connected lazily, but with wait_for_participant
+    # in front of it we have to be explicit.
+    await ctx.connect()
+
     participant = await ctx.wait_for_participant()
     meta = _read_participant_context(participant)
     logger.info(
