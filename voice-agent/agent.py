@@ -72,7 +72,20 @@ def resolve_room_mode(room_name: str) -> str:
     return "pipeline"
 
 
-def _build_session(ctx: JobContext, llm_model_override: str | None = None) -> AgentSession:
+def _build_session(
+    ctx: JobContext,
+    *,
+    llm_model_override: str | None = None,
+    allow_interruptions: bool = False,
+    min_endpointing_delay: float = 1.2,
+) -> AgentSession:
+    """Construct the AgentSession.
+
+    Defaults are tuned for structured Q&A (strict ping-pong: agent finishes
+    its turn before listening, 1.2s of silence before STT finalizes). ROC
+    sessions override to allow_interruptions=True + a tighter endpointing
+    delay so reps can say 'next' and have the bot stop mid-sentence.
+    """
     llm_model = llm_model_override or os.environ.get(
         "EDENAI_MODEL", "openai/gpt-5.4-mini"
     )
@@ -98,11 +111,8 @@ def _build_session(ctx: JobContext, llm_model_override: str | None = None) -> Ag
             api_key=os.environ["EDENAI_API_KEY"],
         ),
         vad=ctx.proc.userdata["vad"],
-        # Strict ping-pong turn-taking: agent finishes its turn before
-        # listening, STT only finalizes after the user has been silent
-        # for ~1.2s. Tuned for structured Q&A (the ROC use case).
-        allow_interruptions=False,
-        min_endpointing_delay=1.2,
+        allow_interruptions=allow_interruptions,
+        min_endpointing_delay=min_endpointing_delay,
     )
 
 
@@ -231,7 +241,15 @@ async def _run_roc_session(ctx: JobContext, meta: dict[str, Any]) -> None:
     instructions = _format_roc_instructions(config["systemPrompt"], records, user)
     greeting = _format_greeting(config["greetingTemplate"], user, len(records))
 
-    session = _build_session(ctx, llm_model_override=config.get("chatModel"))
+    # ROC barge-in: rep can interrupt with "next" / "skip" / a status update
+    # the moment the bot finishes reading the opp header. Endpointing tightened
+    # to 0.6s so we don't sit on silence between turns.
+    session = _build_session(
+        ctx,
+        llm_model_override=config.get("chatModel"),
+        allow_interruptions=True,
+        min_endpointing_delay=0.6,
+    )
 
     # Mirror user + agent turns into roc_transcript_lines. We don't await
     # the POSTs in the hot path — they go to a background task so a slow
