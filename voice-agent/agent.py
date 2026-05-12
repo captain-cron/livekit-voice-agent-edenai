@@ -120,36 +120,35 @@ def _read_participant_context(participant: Any) -> dict[str, Any]:
 
 def _format_roc_instructions(
     base_prompt: str,
-    funnel: list[dict[str, Any]],
+    records: list[dict[str, Any]],
     user: dict[str, Any] | None,
 ) -> str:
     """Compose the system prompt for an ROC session by appending the rep's
-    funnel as compact JSON the LLM can quote when it asks about each opp."""
+    stale-opp worklist (same source the audit page and voice-coach use) as
+    compact JSON the LLM can quote item-by-item."""
     rep_name = (
         (user.get("firstName") or "").strip() if user else ""
     ) or "the rep"
-    # Trim to the first 25 rows + just the columns the bot needs, so we
-    # don't blow the context window on huge funnels.
+    # Keep just the columns the bot's script touches; everything else is
+    # context bloat. limit comes from voice-coach settings already.
     compact = [
         {
-            "opportunityId": r.get("opportunityId"),
-            "oppNumber": r.get("oppNumber"),
-            "name": r.get("oppName"),
-            "status": r.get("oppStatus"),
+            "displayId": r.get("displayId"),
             "customer": r.get("customerName"),
-            "mrc": r.get("oppEstimatedMrc"),
-            "closeDate": r.get("oppCloseDate"),
+            "deal": r.get("dealName"),
+            "status": r.get("currentStatus"),
+            "probability": r.get("probability"),
+            "daysStale": r.get("daysStale"),
+            "lastNote": r.get("lastNoteExcerpt"),
         }
-        for r in (funnel or [])[:25]
+        for r in (records or [])
     ]
     return (
         f"{base_prompt}\n\n"
-        f"You are speaking with {rep_name}. Here is their open funnel as a "
-        f"JSON list (newest first). Walk through them one at a time, ask for "
-        f"a status update, log any follow-ups the rep asks for, and offer "
-        f"to email the customer when a contract is overdue. Keep replies "
-        f"short — this is a phone-quality voice line.\n\n"
-        f"FUNNEL: {json.dumps(compact, default=str)}"
+        f"You are speaking with {rep_name}. Here is their worklist of stale "
+        f"opportunities as a JSON list. Walk through them one at a time in "
+        f"the order given.\n\n"
+        f"WORKLIST: {json.dumps(compact, default=str)}"
     )
 
 
@@ -212,7 +211,7 @@ async def _run_roc_session(ctx: JobContext, meta: dict[str, Any]) -> None:
 
     config = bundle.get("config")
     user = bundle.get("user")
-    funnel = bundle.get("funnel") or []
+    records = bundle.get("records") or []
 
     if not config:
         logger.warning(
@@ -222,8 +221,8 @@ async def _run_roc_session(ctx: JobContext, meta: dict[str, Any]) -> None:
         )
         return await _run_generic_session(ctx, meta)
 
-    instructions = _format_roc_instructions(config["systemPrompt"], funnel, user)
-    greeting = _format_greeting(config["greetingTemplate"], user, len(funnel))
+    instructions = _format_roc_instructions(config["systemPrompt"], records, user)
+    greeting = _format_greeting(config["greetingTemplate"], user, len(records))
 
     session = _build_session(ctx, llm_model_override=config.get("chatModel"))
 
@@ -253,7 +252,7 @@ async def _run_roc_session(ctx: JobContext, meta: dict[str, Any]) -> None:
 
     await session.start(agent=VoiceAssistant(instructions=instructions), room=ctx.room)
     await asyncio.sleep(0.5)
-    _record("system", f"Session opened. Funnel rows: {len(funnel)}.", {"phase": "open"})
+    _record("system", f"Session opened. Stale items: {len(records)}.", {"phase": "open"})
     await session.generate_reply(instructions=greeting)
 
     # Park the worker until the rep disconnects, then trigger end-of-call.
