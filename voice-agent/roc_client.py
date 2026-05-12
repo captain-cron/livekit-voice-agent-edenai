@@ -79,11 +79,17 @@ class RocClient:
             return
         if not text or not text.strip():
             return
+        # Zod's .datetime() validator on the portals.cx route rejects offsets
+        # like '+00:00' by default — it wants the 'Z' suffix (RFC 3339 strict).
+        # datetime.isoformat() on a UTC datetime gives the offset form, so we
+        # swap it. Server now also accepts offsets defensively, but this
+        # keeps older route versions happy too.
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         body = {
             "sessionId": session_id,
             "speaker": speaker,
             "text": text.strip()[:5000],
-            "spokenAt": datetime.now(timezone.utc).isoformat(),
+            "spokenAt": now_iso,
             "meta": meta or {},
         }
         url = f"{self.base_url}/api/voice-agent/internal/transcript"
